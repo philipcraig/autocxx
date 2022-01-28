@@ -50,8 +50,8 @@ use self::{
 };
 
 use super::{
-    analysis::fun::{FnAnalysis, FnKind},
-    api::{Layout, Provenance, RustSubclassFnDetails, TraitImplSignature},
+    analysis::fun::{FnAnalysis, FnKind, PodAndDepAnalysis},
+    api::{Layout, Provenance, RustSubclassFnDetails, TraitImplSignature, UnsafetyNeeded},
     codegen_cpp::type_to_cpp::{
         namespaced_name_using_original_name_map, original_name_map_from_apis, CppNameMap,
     },
@@ -140,7 +140,7 @@ struct SuperclassMethod {
     param_names: Vec<Pat>,
     ret_type: ReturnType,
     receiver_mutability: ReceiverMutability,
-    requires_unsafe: bool,
+    requires_unsafe: UnsafetyNeeded,
     is_pure_virtual: bool,
 }
 
@@ -305,7 +305,10 @@ impl<'a> RsCodeGenerator<'a> {
                                 ret_type: ret_type.clone(),
                                 param_names,
                                 receiver_mutability: receiver_mutability.clone(),
-                                requires_unsafe: param_details.iter().any(|pd| pd.requires_unsafe),
+                                requires_unsafe: UnsafetyNeeded::from_param_details(
+                                    param_details,
+                                    false,
+                                ),
                                 is_pure_virtual: matches!(method_kind, MethodKind::PureVirtual(..)),
                             })
                         }
@@ -530,15 +533,17 @@ impl<'a> RsCodeGenerator<'a> {
                 ..Default::default()
             },
             Api::Struct {
-                details, analysis, ..
+                details,
+                analysis: PodAndDepAnalysis { pod, .. },
+                ..
             } => {
                 let doc_attr = get_doc_attr(&details.item.attrs);
                 let layout = details.layout.clone();
                 self.generate_type(
                     &name,
                     id,
-                    analysis.kind,
-                    analysis.movable,
+                    pod.kind,
+                    pod.movable,
                     || Some((Item::Struct(details.item), doc_attr)),
                     associated_methods,
                     layout,
@@ -663,7 +668,7 @@ impl<'a> RsCodeGenerator<'a> {
                     let peer_fn = make_ident(peer_fn);
                     *(params.iter_mut().next().unwrap()) = first_param;
                     let param_names = m.param_names.iter().skip(1);
-                    let unsafe_token = get_unsafe_token(m.requires_unsafe);
+                    let unsafe_token = m.requires_unsafe.wrapper_token();
                     parse_quote! {
                         #unsafe_token fn #cpp_super_method_name(#params) #ret {
                             use autocxx::subclass::CppSubclass;
@@ -753,7 +758,7 @@ impl<'a> RsCodeGenerator<'a> {
     ) -> RsCodegenResult {
         let params = details.params;
         let ret = details.ret;
-        let unsafe_token = get_unsafe_token(details.requires_unsafe);
+        let unsafe_token = details.requires_unsafe.wrapper_token();
         let global_def = quote! { #unsafe_token fn #api_name(#params) #ret };
         let params = unqualify_params(params);
         let ret = unqualify_ret_type(ret);
@@ -908,7 +913,7 @@ impl<'a> RsCodeGenerator<'a> {
                         ReceiverMutability::Mutable => parse_quote!(&mut self),
                     };
                     let ret_type = &method.ret_type;
-                    let unsafe_token = get_unsafe_token(method.requires_unsafe);
+                    let unsafe_token = method.requires_unsafe.wrapper_token();
                     if method.is_pure_virtual {
                         (
                             None,
@@ -1122,14 +1127,6 @@ impl<'a> RsCodeGenerator<'a> {
 
     fn find_output_mod_root(ns: &Namespace) -> impl Iterator<Item = Ident> {
         std::iter::repeat(make_ident("super")).take(ns.depth())
-    }
-}
-
-fn get_unsafe_token(requires_unsafe: bool) -> TokenStream {
-    if requires_unsafe {
-        quote! { unsafe }
-    } else {
-        quote! {}
     }
 }
 

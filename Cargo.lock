@@ -508,8 +508,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "moveit"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd833d6adefa6bcfc56948d061c1d697dfa3ab63711963c7ef4aa23eda945676"
+source = "git+https://github.com/adetaylor/moveit.git?branch=cxx-mov-function#9155e14f1833812b2cfa0710d94dd5763317dbdb"
 dependencies = [
  "cxx",
 ]

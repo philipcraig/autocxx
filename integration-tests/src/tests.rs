@@ -7415,6 +7415,28 @@ fn test_implicit_constructor_moveit() {
 }
 
 #[test]
+fn test_pass_by_value_moveit() {
+    let hdr = indoc! {"
+    #include <stdint.h>
+    #include <string>
+    struct A {
+        void set(uint32_t val) { a = val; }
+        uint32_t a;
+        std::string so_we_are_non_trivial;
+    };
+    inline void take_a(A a) {}
+    "};
+    let rs = quote! {
+        moveit! {
+            let mut stack_obj = ffi::A::new();
+        }
+        stack_obj.as_mut().set(42);
+        ffi::take_a(&*stack_obj);
+    };
+    run_test("", hdr, rs, &["A", "take_a"], &[]);
+}
+
+#[test]
 fn test_destructor_moveit() {
     let hdr = indoc! {"
     #include <stdint.h>
@@ -7480,28 +7502,6 @@ fn test_copy_and_move_constructor_moveit() {
         // Following line prevented by moveit, even though it would
         // be possible in C++.
         // assert_eq!(stack_obj.get(), 666);
-    };
-    run_test("", hdr, rs, &["A"], &[]);
-}
-
-#[test]
-fn test_uniqueptr_moveit() {
-    let hdr = indoc! {"
-    #include <stdint.h>
-    #include <string>
-    struct A {
-        A() {}
-        void set(uint32_t val) { a = val; }
-        uint32_t get() const { return a; }
-        uint32_t a;
-        std::string so_we_are_non_trivial;
-    };
-    "};
-    let rs = quote! {
-        use autocxx::moveit::EmplaceUnpinned;
-        let mut up_obj = cxx::UniquePtr::emplace(ffi::A::new());
-        up_obj.as_mut().unwrap().set(42);
-        assert_eq!(up_obj.get(), 42);
     };
     run_test("", hdr, rs, &["A"], &[]);
 }
