@@ -31,14 +31,14 @@ jobs:
             sh -s -- --git badboy/mdbook-mermaid
     
       - run: mdbook build
-			  working-directory: book
+        working-directory: book
 
       - run: mdbook test
-			  working-directory: book
+        working-directory: book
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
-			  working-directory: book
+        working-directory: book
         if: ${{ github.ref == 'refs/heads/main' }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
