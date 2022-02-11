@@ -363,7 +363,8 @@ impl<'a> FnAnalyzer<'a> {
             // Trait unsafety must always correspond to the norms for the
             // trait we're implementing.
             FnKind::TraitMethod {
-                kind: TraitMethodKind::CopyConstructor
+                kind:
+                    TraitMethodKind::CopyConstructor
                     | TraitMethodKind::MoveConstructor
                     | TraitMethodKind::Alloc
                     | TraitMethodKind::Dealloc,
