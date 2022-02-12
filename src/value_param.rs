@@ -111,7 +111,7 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
 impl<T, VP: ValueParam<T>> Drop for ValueParamHandler<T, VP> {
     fn drop(&mut self) {
         if self.stack_occupied {
-            unsafe { self.space.assume_init_drop() };
+            unsafe { std::mem::drop(self.space.assume_init_mut()) };
         }
     }
 }
