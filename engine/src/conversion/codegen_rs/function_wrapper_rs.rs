@@ -107,7 +107,7 @@ impl TypeConversionPolicy {
                 let space_var_name = make_ident(format!("{}_space", var_name.to_string()));
                 (
                     Some(quote! {
-                        let mut #space_var_name = autocxx::ValueParamHandler::new(#var_name);
+                        let mut #space_var_name = unsafe { autocxx::ValueParamHandler::new(#var_name) };
                     }),
                     quote! {
                         #space_var_name.get_ptr()

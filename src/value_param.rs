@@ -25,10 +25,14 @@ use std::{marker::PhantomPinned, mem::MaybeUninit, pin::Pin};
 /// copy semantics, or the item itself if you want move semantics.
 /// It is not recommended that you implement this trait.
 pub trait ValueParam<T> {
+    /// Any stack storage required. If, as part of passing to C++,
+    /// we need to store a temporary copy of the value, this will be `T`,
+    /// otherwise `()`.
     type StackStorage;
     fn needs_stack_space(&self) -> bool;
     fn populate_stack_space(&self, this: Pin<&mut MaybeUninit<Self::StackStorage>>);
-    unsafe fn get_ptr(&mut self) -> *mut T;
+    /// Return a pointer to the storage.
+    fn get_ptr(&mut self) -> *mut T;
 }
 
 impl<T> ValueParam<T> for &T
@@ -45,7 +49,7 @@ where
         unsafe { crate::moveit::new::copy(*self).new(this) }
     }
 
-    unsafe fn get_ptr(&mut self) -> *mut T {
+    fn get_ptr(&mut self) -> *mut T {
         std::ptr::null_mut()
     }
 }
@@ -62,11 +66,13 @@ where
 
     fn populate_stack_space(&self, _: Pin<&mut MaybeUninit<Self::StackStorage>>) {}
 
-    unsafe fn get_ptr(&mut self) -> *mut T {
-        Pin::into_inner_unchecked(
-            self.as_mut()
-                .expect("Passed a NULL UniquePtr as a C++ value parameter"),
-        ) as *mut T
+    fn get_ptr(&mut self) -> *mut T {
+        (unsafe {
+            Pin::into_inner_unchecked(
+                self.as_mut()
+                    .expect("Passed a NULL UniquePtr as a C++ value parameter"),
+            )
+        }) as *mut T
     }
 }
 
@@ -74,44 +80,52 @@ where
 #[doc(hidden)]
 pub struct ValueParamHandler<T, VP: ValueParam<T>> {
     param: VP,
-    space: MaybeUninit<VP::StackStorage>,
-    stack_occupied: bool,
+    space: Option<MaybeUninit<VP::StackStorage>>,
     _pinned: PhantomPinned,
 }
 
 impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
-    pub fn new(param: VP) -> Self {
+    /// Create a new storage space for something that's about to be passed
+    /// by value to C++. Depending on the `ValueParam` type passed in,
+    /// this may be largely a no-op or it may involve storing a whole
+    /// extra copy of the type.
+    ///
+    /// # Safety
+    ///
+    /// Callers must guarantee that this type will not move
+    /// in memory.
+    pub unsafe fn new(param: VP) -> Self {
         let mut this = Self {
             param,
-            space: MaybeUninit::uninit(),
-            stack_occupied: false,
+            space: None,
             _pinned: PhantomPinned,
         };
         if this.param.needs_stack_space() {
+            this.space = Some(MaybeUninit::uninit());
             this.param
-                .populate_stack_space(unsafe { Pin::new_unchecked(&mut this.space) });
-            this.stack_occupied = true;
+                .populate_stack_space(Pin::new_unchecked(this.space.as_mut().unwrap()));
         }
         this
     }
-}
 
-impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
+    /// Return a pointer to the underlying value which can be passed to C++.
+    /// Per the unsafety contract of `new`, the object must not have moved
+    /// since it was created.
     pub fn get_ptr(&mut self) -> *mut T {
-        if self.param.needs_stack_space() {
+        if let Some(ref mut space) = self.space {
             let ptr =
-                unsafe { self.space.assume_init_mut() } as *mut <VP as ValueParam<T>>::StackStorage;
+                unsafe { space.assume_init_mut() } as *mut <VP as ValueParam<T>>::StackStorage;
             unsafe { std::mem::transmute(ptr) }
         } else {
-            unsafe { self.param.get_ptr() }
+            self.param.get_ptr()
         }
     }
 }
 
 impl<T, VP: ValueParam<T>> Drop for ValueParamHandler<T, VP> {
     fn drop(&mut self) {
-        if self.stack_occupied {
-            unsafe { std::mem::drop(self.space.assume_init_mut()) };
+        if let Some(space) = self.space.take() {
+            unsafe { std::mem::drop(space.assume_init()) };
         }
     }
 }
