@@ -38,7 +38,7 @@ pub fn subclass(attr: TokenStream, item: TokenStream) -> TokenStream {
         syn::parse(item).unwrap_or_else(|_| abort!(Span::call_site(), "Expected a struct"));
     if !matches!(s.vis, Visibility::Public(..)) {
         use syn::spanned::Spanned;
-        abort!(s.vis.span(), "Rust subclasses of C++ types must by public");
+        abort!(s.vis.span(), "Rust subclasses of C++ types must be public");
     }
     let id = &s.ident;
     let cpp_ident = Ident::new(&format!("{}Cpp", id), Span::call_site());
