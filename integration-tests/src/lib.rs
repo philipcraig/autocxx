@@ -1,16 +1,10 @@
 // Copyright 2022 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use std::{
     ffi::OsStr,
@@ -39,19 +33,9 @@ pub fn doctest(
     rust_code: TokenStream,
     manifest_dir: &OsStr,
 ) -> Result<(), TestError> {
-    let stdout_gag = gag::BufferRedirect::stdout().unwrap();
     std::env::set_var("CARGO_PKG_NAME", "autocxx-integration-tests");
     std::env::set_var("CARGO_MANIFEST_DIR", manifest_dir);
-    let r = do_run_test_manual(cxx_code, header_code, rust_code, None, None);
-    let mut stdout_str = String::new();
-    stdout_gag
-        .into_inner()
-        .read_to_string(&mut stdout_str)
-        .unwrap();
-    if !stdout_str.is_empty() {
-        eprintln!("Stdout from test:\n{}", stdout_str);
-    }
-    r
+    do_run_test_manual(cxx_code, header_code, rust_code, None, None)
 }
 
 fn get_builder() -> &'static Mutex<LinkableTryBuilder> {

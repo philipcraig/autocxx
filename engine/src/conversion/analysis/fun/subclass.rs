@@ -1,16 +1,10 @@
 // Copyright 2021 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use std::collections::HashMap;
 
@@ -22,6 +16,7 @@ use crate::conversion::api::{
     CppVisibility, FuncToConvert, Provenance, RustSubclassFnDetails, SubclassConstructorDetails,
     SubclassName, SuperclassMethod, UnsafetyNeeded, Virtualness,
 };
+use crate::conversion::apivec::ApiVec;
 use crate::{
     conversion::{
         analysis::fun::function_wrapper::{
@@ -35,7 +30,7 @@ use crate::{
 use super::{FnAnalysis, FnPrePhase};
 
 pub(super) fn subclasses_by_superclass(
-    apis: &[Api<PodPhase>],
+    apis: &ApiVec<PodPhase>,
 ) -> HashMap<QualifiedName, Vec<SubclassName>> {
     let mut subclasses_per_superclass: HashMap<QualifiedName, Vec<SubclassName>> = HashMap::new();
 
@@ -51,7 +46,7 @@ pub(super) fn subclasses_by_superclass(
 }
 
 pub(super) fn create_subclass_fn_wrapper(
-    sub: SubclassName,
+    sub: &SubclassName,
     super_fn_name: &QualifiedName,
     fun: &FuncToConvert,
 ) -> Box<FuncToConvert> {
@@ -144,7 +139,7 @@ pub(super) fn create_subclass_function(
             method_name: make_ident(&analysis.rust_name),
             cpp_impl: CppFunction {
                 payload: CppFunctionBody::FunctionCall(Namespace::new(), rust_call_name),
-                wrapper_function_name: name.name.get_final_ident(),
+                wrapper_function_name: make_ident(&analysis.rust_name),
                 original_cpp_name: name.cpp_name(),
                 return_conversion: analysis.ret_conversion.clone(),
                 argument_conversion,

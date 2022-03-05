@@ -1,16 +1,10 @@
 // Copyright 2022 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +12,7 @@ use crate::{
     conversion::{
         analysis::{depth_first::depth_first, pod::PodAnalysis, type_converter::find_types},
         api::{Api, CppVisibility, FuncToConvert, SpecialMemberKind},
+        apivec::ApiVec,
     },
     known_types::known_types,
     types::QualifiedName,
@@ -58,7 +53,7 @@ struct ExplicitFound {
 /// we can simply generate the sort of thing bindgen generates, then ask
 /// the existing code in this phase to figure out what to do with it.
 pub(super) fn find_missing_constructors(
-    apis: &[Api<FnPrePhase>],
+    apis: &ApiVec<FnPrePhase>,
 ) -> HashMap<QualifiedName, ImplicitConstructorsNeeded> {
     let mut all_known_types = find_types(apis);
     all_known_types.extend(known_types().all_names().cloned());
@@ -77,6 +72,11 @@ pub(super) fn find_missing_constructors(
             ..
         } = api
         {
+            if name.cpp_name_if_present().is_some() {
+                // For now we do not generate implicit constructors for nested structs - see
+                // https://github.com/google/autocxx/issues/884
+                continue;
+            }
             let name = &name.name;
             let find = |kind: ExplicitKind| -> bool {
                 explicits.contains(&ExplicitFound {
@@ -149,7 +149,7 @@ pub(super) fn find_missing_constructors(
     implicit_constructors_needed
 }
 
-fn find_explicit_items(apis: &[Api<FnPrePhase>]) -> HashSet<ExplicitFound> {
+fn find_explicit_items(apis: &ApiVec<FnPrePhase>) -> HashSet<ExplicitFound> {
     apis.iter()
         .filter_map(|api| match api {
             Api::Function {

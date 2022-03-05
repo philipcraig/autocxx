@@ -1,16 +1,10 @@
 // Copyright 2020 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use std::fmt::Display;
 
@@ -60,6 +54,7 @@ pub enum ConvertError {
     RValueReferenceField,
     MethodOfNonAllowlistedType,
     MethodOfGenericType,
+    DuplicateItemsFoundInParsing,
 }
 
 fn format_maybe_identifier(id: &Option<Ident>) -> String {
@@ -112,6 +107,7 @@ impl Display for ConvertError {
             ConvertError::RValueReferenceField => write!(f, "This structure has an rvalue reference field (&&) which is not yet supported.")?,
             ConvertError::MethodOfNonAllowlistedType => write!(f, "This type was not on the allowlist, so we are not generating methods for it.")?,
             ConvertError::MethodOfGenericType => write!(f, "This type is templated, so we can't generate bindings. We will instead generate bindings for each instantiation.")?,
+            ConvertError::DuplicateItemsFoundInParsing => write!(f, "bindgen generated multiple different APIs (functions/types) with this name. autocxx doesn't know how to diambiguate them, so we won't generate bindings for any of them.")?,
         }
         Ok(())
     }

@@ -1,23 +1,20 @@
 // Copyright 2022 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use itertools::Itertools;
 use quote::quote;
 use syn::{parse_quote, FnArg};
 
 use crate::{
-    conversion::api::{Api, ApiName, CastMutability, Provenance, References, TraitSynthesis},
+    conversion::{
+        api::{Api, ApiName, CastMutability, Provenance, References, TraitSynthesis},
+        apivec::ApiVec,
+    },
     types::{make_ident, QualifiedName},
 };
 
@@ -33,7 +30,7 @@ use super::{
     pod::{PodAnalysis, PodPhase},
 };
 
-pub(crate) fn add_casts(apis: Vec<Api<PodPhase>>) -> Vec<Api<PodPhase>> {
+pub(crate) fn add_casts(apis: ApiVec<PodPhase>) -> ApiVec<PodPhase> {
     apis.into_iter()
         .flat_map(|api| {
             let mut resultant_apis = match api {

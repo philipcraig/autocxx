@@ -1,22 +1,17 @@
 // Copyright 2020 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use std::collections::HashSet;
 
 use crate::{
     conversion::{
-        api::{Api, ApiName, StructDetails, SubclassName, TypedefKind, UnanalyzedApi},
+        api::{Api, ApiName, NullPhase, StructDetails, SubclassName, TypedefKind, UnanalyzedApi},
+        apivec::ApiVec,
         ConvertError,
     },
     types::Namespace,
@@ -41,7 +36,7 @@ use super::parse_foreign_mod::ParseForeignMod;
 /// Parses a bindgen mod in order to understand the APIs within it.
 pub(crate) struct ParseBindgen<'a> {
     config: &'a IncludeCppConfig,
-    apis: Vec<UnanalyzedApi>,
+    apis: ApiVec<NullPhase>,
 }
 
 fn api_name(ns: &Namespace, id: Ident, attrs: &BindgenSemanticAttributes) -> ApiName {
@@ -66,7 +61,7 @@ impl<'a> ParseBindgen<'a> {
     pub(crate) fn new(config: &'a IncludeCppConfig) -> Self {
         ParseBindgen {
             config,
-            apis: Vec::new(),
+            apis: ApiVec::new(),
         }
     }
 
@@ -75,7 +70,7 @@ impl<'a> ParseBindgen<'a> {
     pub(crate) fn parse_items(
         mut self,
         items: Vec<Item>,
-    ) -> Result<Vec<UnanalyzedApi>, ConvertError> {
+    ) -> Result<ApiVec<NullPhase>, ConvertError> {
         let items = Self::find_items_in_root(items)?;
         if !self.config.exclude_utilities() {
             generate_utilities(&mut self.apis, self.config);
@@ -137,7 +132,7 @@ impl<'a> ParseBindgen<'a> {
         // This object maintains some state specific to this namespace, i.e.
         // this particular mod.
         let mut mod_converter = ParseForeignMod::new(ns.clone());
-        let mut more_apis = Vec::new();
+        let mut more_apis = ApiVec::new();
         for item in items {
             report_any_error(&ns, &mut more_apis, || {
                 self.parse_item(item, &mut mod_converter, &ns)
@@ -188,7 +183,7 @@ impl<'a> ParseBindgen<'a> {
                 };
                 if let Some(api) = api {
                     if !self.config.is_on_blocklist(&api.name().to_cpp_name()) {
-                        self.apis.push(api);
+                        self.apis.push_eliminating_duplicates(api);
                     }
                 }
                 Ok(())
@@ -200,7 +195,7 @@ impl<'a> ParseBindgen<'a> {
                     item: e,
                 };
                 if !self.config.is_on_blocklist(&api.name().to_cpp_name()) {
-                    self.apis.push(api);
+                    self.apis.push_eliminating_duplicates(api);
                 }
                 Ok(())
             }
@@ -257,14 +252,15 @@ impl<'a> ParseBindgen<'a> {
                                 ));
                             }
                             let annotations = BindgenSemanticAttributes::new(&use_item.attrs);
-                            self.apis.push(UnanalyzedApi::Typedef {
-                                name: api_name(ns, new_id.clone(), &annotations),
-                                item: TypedefKind::Use(parse_quote! {
-                                    pub use #old_path as #new_id;
-                                }),
-                                old_tyname: Some(old_tyname),
-                                analysis: (),
-                            });
+                            self.apis
+                                .push_eliminating_duplicates(UnanalyzedApi::Typedef {
+                                    name: api_name(ns, new_id.clone(), &annotations),
+                                    item: TypedefKind::Use(parse_quote! {
+                                        pub use #old_path as #new_id;
+                                    }),
+                                    old_tyname: Some(old_tyname),
+                                    analysis: (),
+                                });
                             break;
                         }
                         _ => {
@@ -279,7 +275,7 @@ impl<'a> ParseBindgen<'a> {
             }
             Item::Const(const_item) => {
                 let annotations = BindgenSemanticAttributes::new(&const_item.attrs);
-                self.apis.push(UnanalyzedApi::Const {
+                self.apis.push_eliminating_duplicates(UnanalyzedApi::Const {
                     name: api_name(ns, const_item.ident.clone(), &annotations),
                     const_item,
                 });
@@ -287,12 +283,15 @@ impl<'a> ParseBindgen<'a> {
             }
             Item::Type(ity) => {
                 let annotations = BindgenSemanticAttributes::new(&ity.attrs);
-                self.apis.push(UnanalyzedApi::Typedef {
-                    name: api_name(ns, ity.ident.clone(), &annotations),
-                    item: TypedefKind::Type(ity),
-                    old_tyname: None,
-                    analysis: (),
-                });
+                // It's known that sometimes bindgen will give us duplicate typedefs with the
+                // same name - see test_issue_264.
+                self.apis
+                    .push_eliminating_duplicates(UnanalyzedApi::Typedef {
+                        name: api_name(ns, ity.ident.clone(), &annotations),
+                        item: TypedefKind::Type(ity),
+                        old_tyname: None,
+                        analysis: (),
+                    });
                 Ok(())
             }
             _ => Err(ConvertErrorWithContext(

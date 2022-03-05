@@ -1,16 +1,10 @@
 // Copyright 2021 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use crate::{
     builder_modifiers::{
@@ -2325,6 +2319,23 @@ fn test_destructor() {
     run_test(cxx, hdr, rs, &["WithDtor", "make_with_dtor"], &[]);
 }
 
+#[test]
+fn test_nested_with_destructor() {
+    // Regression test, naming the destructor in the generated C++ is a bit tricky.
+    let hdr = indoc! {"
+        struct A {
+            struct B {
+                B() = default;
+                ~B() = default;
+            };
+        };
+    "};
+    let rs = quote! {
+        ffi::A_B::make_unique();
+    };
+    run_test("", hdr, rs, &["A", "A_B"], &[]);
+}
+
 // Even without a `safety!`, we still need to generate a safe `fn drop`.
 #[test]
 fn test_destructor_no_safety() {
@@ -2937,9 +2948,7 @@ fn test_enum_typedef() {
     let hdr = indoc! {"
         enum ConstraintSolverParameters_TrailCompression : int {
             ConstraintSolverParameters_TrailCompression_NO_COMPRESSION = 0,
-            ConstraintSolverParameters_TrailCompression_COMPRESS_WITH_ZLIB = 1,
-            ConstraintSolverParameters_TrailCompression_ConstraintSolverParameters_TrailCompression_INT_MIN_SENTINEL_DO_NOT_USE_ = -2147483648,
-            ConstraintSolverParameters_TrailCompression_ConstraintSolverParameters_TrailCompression_INT_MAX_SENTINEL_DO_NOT_USE_ = 2147483647
+            ConstraintSolverParameters_TrailCompression_COMPRESS_WITH_ZLIB = 1
         };
         typedef ConstraintSolverParameters_TrailCompression TrailCompression;
     "};
@@ -3038,6 +3047,21 @@ fn test_associated_type_problem() {
     "};
     let rs = quote! {};
     run_test("", hdr, rs, &["B"], &[]);
+}
+
+#[test]
+fn test_two_type_constructors() {
+    // https://github.com/google/autocxx/issues/877
+    let hdr = indoc! {"
+        struct A {
+            int a;
+        };
+        struct B {
+            int B;
+        };
+    "};
+    let rs = quote! {};
+    run_test("", hdr, rs, &["A", "B"], &[]);
 }
 
 #[ignore] // https://github.com/rust-lang/rust-bindgen/issues/1924
@@ -5403,6 +5427,24 @@ fn test_closure() {
 }
 
 #[test]
+fn test_multiply_nested_inner_type() {
+    let hdr = indoc! {"
+        struct Turkey {
+            struct Duck {
+                struct Hen {
+                    Hen() {}
+                    int wings;
+                };
+            };
+        };
+        "};
+    let rs = quote! {
+        ffi::Turkey_Duck_Hen::make_unique();
+    };
+    run_test("", hdr, rs, &[], &["Turkey_Duck_Hen"]);
+}
+
+#[test]
 fn test_underscored_namespace_for_inner_type() {
     let hdr = indoc! {"
         namespace __foo {
@@ -6576,7 +6618,7 @@ fn test_pv_subclass_derive_defaults() {
 }
 
 #[test]
-fn test_non_pv_subclass() {
+fn test_non_pv_subclass_simple() {
     let hdr = indoc! {"
     #include <cstdint>
 
@@ -7504,7 +7546,7 @@ fn test_pv_subclass_fancy_constructor() {
 }
 
 #[test]
-fn test_non_pv_subclass_overrides() {
+fn test_non_pv_subclass_overloads() {
     let hdr = indoc! {"
     #include <cstdint>
     #include <string>

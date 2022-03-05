@@ -1,16 +1,10 @@
 // Copyright 2022 Google LLC
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
 use cxx::{memory::UniquePtrTarget, UniquePtr};
 use moveit::{CopyNew, New};
@@ -201,7 +195,7 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
     /// since it was created, and [`populate`] has been called exactly once
     /// prior to this call.
     pub fn get_ptr(&mut self) -> *mut T {
-        if let Some(ref mut space) = self.space {
+        if let Some(space) = &mut self.space {
             // Safety: 'space' is guaranteed to be populated due to the unsafety
             // contract of 'populate'.
             let ptr =
@@ -217,8 +211,9 @@ impl<T, VP: ValueParam<T>> ValueParamHandler<T, VP> {
 
 impl<T, VP: ValueParam<T>> Drop for ValueParamHandler<T, VP> {
     fn drop(&mut self) {
-        if let Some(space) = self.space.take() {
-            unsafe { space.assume_init() };
+        if let Some(space) = self.space.as_mut() {
+            // Switch to MaybeUninit::assume_init_drop when stabilized
+            unsafe { std::ptr::drop_in_place(space.assume_init_mut()) };
         }
     }
 }
