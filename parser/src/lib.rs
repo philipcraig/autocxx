@@ -13,7 +13,7 @@ pub mod file_locations;
 mod path;
 mod subclass_attrs;
 
-pub use config::{IncludeCppConfig, RustFun, Subclass, UnsafePolicy};
+pub use config::{AllowlistEntry, IncludeCppConfig, RustFun, Subclass, UnsafePolicy};
 use file_locations::FileLocationStrategy;
 pub use path::RustPath;
 use proc_macro2::TokenStream as TokenStream2;
@@ -29,7 +29,7 @@ use syn::{
 /// and the standalone macro discoverer
 pub mod directives {
     pub static EXTERN_RUST_TYPE: &str = "extern_rust_type";
-    pub static EXTERN_RUST_FUN: &str = "extern_rust_fun";
+    pub static EXTERN_RUST_FUN: &str = "extern_rust_function";
     pub static SUBCLASS: &str = "subclass";
 }
 

@@ -19,28 +19,30 @@ First, add `autocxx` *and `cxx`* to your `dependencies` and `autocxx-build` to y
 
 ```toml
 [dependencies]
-autocxx = "0.17.0"
+autocxx = "0.18.0"
 cxx = "1.0"
 
 [build-dependencies]
-autocxx-build = "0.17.0"
+autocxx-build = "0.18.0"
+miette = { version="4.3", features=["fancy"] } // optional but gives nicer error messages!
 ```
 
 Now, add a `build.rs` next to your `Cargo.toml` (this is a standard `cargo` [build script](https://doc.rust-lang.org/cargo/reference/build-scripts.html)). This is where you need your include path:
 
 ```rust,ignore
-fn main() {
+fn main() -> miette::Result<()> {
     let path = std::path::PathBuf::from("src"); // include path
-    let mut b = autocxx_build::Builder::new("src/main.rs", &[&path]).expect_build();
+    let mut b = autocxx_build::Builder::new("src/main.rs", &[&path]).build()?;
         // This assumes all your C++ bindings are in main.rs
     b.flag_if_supported("-std=c++14")
      .compile("autocxx-demo"); // arbitrary library name, pick anything
     println!("cargo:rerun-if-changed=src/main.rs");
     // Add instructions to link to any C++ libraries you need.
+    Ok(())
 }
 ```
 
-(See [the standard cargo build script output mechanisms for how you can direct Rust to link against pre-existing libraries](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script)).
+See [the standard cargo build script output mechanisms for how you can direct Rust to link against pre-existing libraries](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script), and see the [building section of this book for more details about build options - for example, enabling C++17](building.md).
 
 Finally, in your `main.rs` you can use the [`include_cpp`](https://docs.rs/autocxx/latest/autocxx/macro.include_cpp.html) macro which is the heart of `autocxx`:
 

@@ -24,8 +24,8 @@ use crate::{
             UnsafetyNeeded, Virtualness,
         },
         apivec::ApiVec,
-        convert_error::ConvertErrorWithContext,
         convert_error::ErrorContext,
+        convert_error::{ConvertErrorWithContext, ErrorContextType},
         error_reporter::{convert_apis, report_any_error},
     },
     known_types::known_types,
@@ -63,6 +63,7 @@ use self::{
 };
 
 use super::{
+    doc_label::make_doc_attrs,
     pod::{PodAnalysis, PodPhase},
     tdef::TypedefAnalysis,
     type_converter::Annotated,
@@ -302,7 +303,7 @@ impl<'a> FnAnalyzer<'a> {
         convert_apis(
             apis,
             &mut results,
-            |name, fun, _, _| me.analyze_foreign_fn_and_subclasses(name, fun),
+            |name, fun, _| me.analyze_foreign_fn_and_subclasses(name, fun),
             Api::struct_unchanged,
             Api::enum_unchanged,
             Api::typedef_unchanged,
@@ -632,7 +633,6 @@ impl<'a> FnAnalyzer<'a> {
             fun,
             analysis,
             name,
-            name_for_gc: None,
         });
 
         Ok(Box::new(results.into_iter()))
@@ -652,7 +652,6 @@ impl<'a> FnAnalyzer<'a> {
             fun: new_func,
             analysis,
             name: name.clone(),
-            name_for_gc: None,
         });
         name.name
     }
@@ -818,9 +817,13 @@ impl<'a> FnAnalyzer<'a> {
                     .unwrap_or_else(|| self.get_overload_name(ns, type_ident, rust_name));
                 let error_context = error_context_for_method(&self_ty, &rust_name);
 
+                // If this is 'None', then something weird is going on. We'll check for that
+                // later when we have enough context to generate useful errors.
                 let arg_is_reference = matches!(
-                    param_details[1].conversion.unwrapped_type,
-                    Type::Reference(_)
+                    param_details
+                        .get(1)
+                        .map(|param| &param.conversion.unwrapped_type),
+                    Some(Type::Reference(_))
                 );
                 // Some exotic forms of copy constructor have const and/or volatile qualifiers.
                 // These are not sufficient to implement CopyNew, so we just treat them as regular
@@ -961,7 +964,7 @@ impl<'a> FnAnalyzer<'a> {
             let rust_name = self.get_function_overload_name(ns, ideal_rust_name);
             (
                 FnKind::Function,
-                ErrorContext::Item(make_ident(&rust_name)),
+                ErrorContext::new_for_item(make_ident(&rust_name)),
                 rust_name,
             )
         };
@@ -1018,6 +1021,12 @@ impl<'a> FnAnalyzer<'a> {
                 kind: TraitMethodKind::CopyConstructor,
                 ..
             } => {
+                if param_details.len() < 2 {
+                    set_ignore_reason(ConvertError::ConstructorWithOnlyOneParam);
+                }
+                if param_details.len() > 2 {
+                    set_ignore_reason(ConvertError::ConstructorWithMultipleParams);
+                }
                 self.reanalyze_parameter(
                     0,
                     fun,
@@ -1035,6 +1044,12 @@ impl<'a> FnAnalyzer<'a> {
                 kind: TraitMethodKind::MoveConstructor,
                 ..
             } => {
+                if param_details.len() < 2 {
+                    set_ignore_reason(ConvertError::ConstructorWithOnlyOneParam);
+                }
+                if param_details.len() > 2 {
+                    set_ignore_reason(ConvertError::ConstructorWithMultipleParams);
+                }
                 self.reanalyze_parameter(
                     0,
                     fun,
@@ -1075,10 +1090,22 @@ impl<'a> FnAnalyzer<'a> {
             CppVisibility::Protected => false,
             CppVisibility::Public => true,
         };
-        if matches!(
+        if let Some(problem) = bads.into_iter().next() {
+            match problem {
+                Ok(_) => panic!("No error in the error"),
+                Err(problem) => set_ignore_reason(problem),
+            }
+        } else if fun.unused_template_param {
+            // This indicates that bindgen essentially flaked out because templates
+            // were too complex.
+            set_ignore_reason(ConvertError::UnusedTemplateParam)
+        } else if matches!(
             fun.special_member,
             Some(SpecialMemberKind::AssignmentOperator)
         ) {
+            // Be careful with the order of this if-else tree. Anything above here means we won't
+            // treat it as an assignment operator, but anything below we still consider when
+            // deciding which other C++ special member functions are implicitly defined.
             set_ignore_reason(ConvertError::AssignmentOperator)
         } else if fun.references.rvalue_ref_return {
             set_ignore_reason(ConvertError::RValueReturn)
@@ -1094,15 +1121,6 @@ impl<'a> FnAnalyzer<'a> {
             )
         {
             set_ignore_reason(ConvertError::RValueParam)
-        } else if let Some(problem) = bads.into_iter().next() {
-            match problem {
-                Ok(_) => panic!("No error in the error"),
-                Err(problem) => set_ignore_reason(problem),
-            }
-        } else if fun.unused_template_param {
-            // This indicates that bindgen essentially flaked out because templates
-            // were too complex.
-            set_ignore_reason(ConvertError::UnusedTemplateParam)
         } else {
             match kind {
                 FnKind::Method {
@@ -1481,7 +1499,7 @@ impl<'a> FnAnalyzer<'a> {
                             trait_call_is_unsafe: false,
                         }),
                     },
-                    ErrorContext::Item(make_ident(&rust_name)),
+                    ErrorContext::new_for_item(make_ident(&rust_name)),
                     rust_name,
                 ))
             }
@@ -1526,7 +1544,7 @@ impl<'a> FnAnalyzer<'a> {
                 }),
                 kind,
             },
-            ErrorContext::Item(make_ident(&rust_name)),
+            ErrorContext::new_for_item(make_ident(&rust_name)),
             rust_name,
         ))
     }
@@ -1591,12 +1609,15 @@ impl<'a> FnAnalyzer<'a> {
                                     };
                                     Ok((this_type, receiver_mutability))
                                 }
-                                _ => Err(ConvertError::UnexpectedThisType(
-                                    ns.clone(),
-                                    fn_name.into(),
-                                )),
+                                _ => Err(ConvertError::UnexpectedThisType(QualifiedName::new(
+                                    ns,
+                                    make_ident(fn_name),
+                                ))),
                             },
-                            _ => Err(ConvertError::UnexpectedThisType(ns.clone(), fn_name.into())),
+                            _ => Err(ConvertError::UnexpectedThisType(QualifiedName::new(
+                                ns,
+                                make_ident(fn_name),
+                            ))),
                         }?;
                         self_type = Some(this_type);
                         if treat_this_as_reference {
@@ -1673,7 +1694,7 @@ impl<'a> FnAnalyzer<'a> {
                 };
                 TypeConversionPolicy {
                     unwrapped_type: ty,
-                    cpp_conversion: CppConversionType::None,
+                    cpp_conversion: CppConversionType::Move,
                     rust_conversion: RustConversionType::ToBoxedUpHolder(subclass),
                 }
             };
@@ -1683,7 +1704,15 @@ impl<'a> FnAnalyzer<'a> {
                 let ty = ty.clone();
                 let tn = QualifiedName::from_type_path(p);
                 if self.pod_safe_types.contains(&tn) {
-                    TypeConversionPolicy::new_unconverted(ty)
+                    if known_types().lacks_copy_constructor(&tn) {
+                        TypeConversionPolicy {
+                            unwrapped_type: ty,
+                            cpp_conversion: CppConversionType::Move,
+                            rust_conversion: RustConversionType::None,
+                        }
+                    } else {
+                        TypeConversionPolicy::new_unconverted(ty)
+                    }
                 } else if known_types().convertible_from_strs(&tn)
                     && !self.config.exclude_utilities()
                 {
@@ -1914,7 +1943,7 @@ impl<'a> FnAnalyzer<'a> {
                     Box::new(FuncToConvert {
                         self_ty: Some(self_ty.clone()),
                         ident,
-                        doc_attr: None,
+                        doc_attrs: make_doc_attrs(format!("Synthesized {}.", special_member)),
                         inputs,
                         output: ReturnType::Default,
                         vis: parse_quote! { pub },
@@ -1940,19 +1969,12 @@ impl<'a> FnAnalyzer<'a> {
 }
 
 fn error_context_for_method(self_ty: &QualifiedName, rust_name: &str) -> ErrorContext {
-    ErrorContext::Method {
-        self_ty: self_ty.get_final_ident(),
-        method: make_ident(rust_name),
-    }
+    ErrorContext::new_for_method(self_ty.get_final_ident(), make_ident(rust_name))
 }
 
 impl Api<FnPhase> {
-    pub(crate) fn typename_for_allowlist(&self) -> QualifiedName {
+    pub(crate) fn name_for_allowlist(&self) -> QualifiedName {
         match &self {
-            Api::Function {
-                name_for_gc: Some(name),
-                ..
-            } => name.clone(),
             Api::Function { analysis, .. } => match analysis.kind {
                 FnKind::Method { ref impl_for, .. } => impl_for.clone(),
                 FnKind::TraitMethod { ref impl_for, .. } => impl_for.clone(),
@@ -1961,6 +1983,19 @@ impl Api<FnPhase> {
                 }
             },
             Api::RustSubclassFn { subclass, .. } => subclass.0.name.clone(),
+            Api::IgnoredItem {
+                name,
+                ctx: Some(ctx),
+                ..
+            } => match ctx.get_type() {
+                ErrorContextType::Method { self_ty, .. } => {
+                    QualifiedName::new(name.name.get_namespace(), self_ty.clone())
+                }
+                ErrorContextType::Item(id) => {
+                    QualifiedName::new(name.name.get_namespace(), id.clone())
+                }
+                _ => name.name.clone(),
+            },
             _ => self.name().clone(),
         }
     }

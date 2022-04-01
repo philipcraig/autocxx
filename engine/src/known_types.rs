@@ -27,6 +27,7 @@ enum Behavior {
     CByValue,
     CVariableLengthByValue,
     CVoid,
+    CChar16,
     RustContainerByValueSafe,
 }
 
@@ -205,6 +206,7 @@ impl TypeDatabase {
                         | Behavior::RustByValue
                         | Behavior::CByValue
                         | Behavior::CVariableLengthByValue
+                        | Behavior::CChar16
                         | Behavior::RustContainerByValueSafe => true,
                         Behavior::CxxString
                         | Behavior::CxxContainerNotByValueSafe
@@ -232,6 +234,18 @@ impl TypeDatabase {
     pub(crate) fn should_dereference_in_cpp(&self, tn: &QualifiedName) -> bool {
         self.get(tn)
             .map(|td| matches!(td.behavior, Behavior::RustStr))
+            .unwrap_or(false)
+    }
+
+    /// Whether this can only be passed around using `std::move`
+    pub(crate) fn lacks_copy_constructor(&self, tn: &QualifiedName) -> bool {
+        self.get(tn)
+            .map(|td| {
+                matches!(
+                    td.behavior,
+                    Behavior::CxxContainerByValueSafe | Behavior::CxxContainerNotByValueSafe
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -271,7 +285,7 @@ impl TypeDatabase {
             .map(|td| {
                 matches!(
                     td.behavior,
-                    Behavior::CVariableLengthByValue | Behavior::CVoid
+                    Behavior::CVariableLengthByValue | Behavior::CVoid | Behavior::CChar16
                 )
             })
             .unwrap_or(false)
@@ -482,10 +496,26 @@ fn create_type_database() -> TypeDatabase {
         true,
     ));
     db.insert(TypeDetails::new(
+        "usize",
+        "size_t",
+        Behavior::CByValue,
+        None,
+        true,
+        true,
+    ));
+    db.insert(TypeDetails::new(
         "autocxx::c_void",
         "void",
         Behavior::CVoid,
         Some("std::os::raw::c_void".into()),
+        false,
+        false,
+    ));
+    db.insert(TypeDetails::new(
+        "autocxx::c_char16_t",
+        "char16_t",
+        Behavior::CChar16,
+        Some("c_char16_t".into()),
         false,
         false,
     ));

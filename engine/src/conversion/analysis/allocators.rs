@@ -70,10 +70,9 @@ fn create_alloc_and_free(ty_name: QualifiedName) -> impl Iterator<Item = Api<Pod
             let api_name = ApiName::new_from_qualified_name(name);
             Api::Function {
                 name: api_name,
-                name_for_gc: None,
                 fun: Box::new(FuncToConvert {
                     ident,
-                    doc_attr: None,
+                    doc_attrs: Vec::new(),
                     inputs,
                     output,
                     vis: parse_quote! { pub },

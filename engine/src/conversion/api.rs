@@ -6,10 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Display};
 
 use crate::types::{make_ident, Namespace, QualifiedName};
-use autocxx_parser::RustPath;
+use autocxx_parser::{RustFun, RustPath};
 use itertools::Itertools;
 use quote::ToTokens;
 use syn::{
@@ -17,7 +17,7 @@ use syn::{
     punctuated::Punctuated,
     token::{Comma, Unsafe},
     Attribute, FnArg, Ident, ItemConst, ItemEnum, ItemStruct, ItemType, ItemUse, LitBool, LitInt,
-    Pat, ReturnType, Signature, Type, Visibility,
+    Pat, ReturnType, Type, Visibility,
 };
 
 use super::{
@@ -202,6 +202,22 @@ pub(crate) enum SpecialMemberKind {
     AssignmentOperator,
 }
 
+impl Display for SpecialMemberKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                SpecialMemberKind::DefaultConstructor => "default constructor",
+                SpecialMemberKind::CopyConstructor => "copy constructor",
+                SpecialMemberKind::MoveConstructor => "move constructor",
+                SpecialMemberKind::Destructor => "destructor",
+                SpecialMemberKind::AssignmentOperator => "assignment operator",
+            }
+        )
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum Provenance {
     Bindgen,
@@ -224,7 +240,7 @@ pub(crate) enum Provenance {
 pub(crate) struct FuncToConvert {
     pub(crate) provenance: Provenance,
     pub(crate) ident: Ident,
-    pub(crate) doc_attr: Option<Attribute>,
+    pub(crate) doc_attrs: Vec<Attribute>,
     pub(crate) inputs: Punctuated<FnArg, Comma>,
     pub(crate) output: ReturnType,
     pub(crate) vis: Visibility,
@@ -420,7 +436,7 @@ pub(crate) enum Api<T: AnalysisPhase> {
     /// concretize some templated C++ type.
     ConcreteType {
         name: ApiName,
-        rs_definition: Box<Type>,
+        rs_definition: Option<Box<Type>>,
         cpp_definition: String,
     },
     /// A simple note that we want to make a constructor for
@@ -429,7 +445,6 @@ pub(crate) enum Api<T: AnalysisPhase> {
     /// A function. May include some analysis.
     Function {
         name: ApiName,
-        name_for_gc: Option<QualifiedName>,
         fun: Box<FuncToConvert>,
         analysis: T::FunAnalysis,
     },
@@ -468,15 +483,15 @@ pub(crate) enum Api<T: AnalysisPhase> {
     IgnoredItem {
         name: ApiName,
         err: ConvertError,
-        ctx: ErrorContext,
+        ctx: Option<ErrorContext>,
     },
     /// A Rust type which is not a C++ type.
     RustType { name: ApiName, path: RustPath },
     /// A function for the 'extern Rust' block which is not a C++ type.
     RustFn {
         name: ApiName,
-        sig: Signature,
-        path: RustPath,
+        details: RustFun,
+        receiver: Option<QualifiedName>,
     },
     /// Some function for the extern "Rust" block.
     RustSubclassFn {
@@ -627,7 +642,6 @@ impl<T: AnalysisPhase> Api<T> {
         name: ApiName,
         fun: Box<FuncToConvert>,
         analysis: T::FunAnalysis,
-        name_for_gc: Option<QualifiedName>,
     ) -> Result<Box<dyn Iterator<Item = Api<T>>>, ConvertErrorWithContext>
     where
         T: 'static,
@@ -636,7 +650,6 @@ impl<T: AnalysisPhase> Api<T> {
             name,
             fun,
             analysis,
-            name_for_gc,
         })))
     }
 

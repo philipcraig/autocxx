@@ -14,7 +14,10 @@ use super::{
     convert_error::{ConvertErrorWithContext, ErrorContext},
     ConvertError,
 };
-use crate::types::{Namespace, QualifiedName};
+use crate::{
+    conversion::convert_error::ErrorContextType,
+    types::{Namespace, QualifiedName},
+};
 
 /// Run some code which may generate a ConvertError.
 /// If it does, try to note the problem in our output APIs
@@ -34,10 +37,16 @@ where
             None
         }
         Err(ConvertErrorWithContext(err, Some(ctx))) => {
-            eprintln!("Ignored item {}: {}", ctx, err);
-            if let Some(item) = ignored_item(ns, ctx, err) {
-                apis.push(item);
-            }
+            let id = match ctx.get_type() {
+                ErrorContextType::Item(id) | ErrorContextType::SanitizedItem(id) => id,
+                ErrorContextType::Method { self_ty, .. } => self_ty,
+            };
+            let name = ApiName::new_from_qualified_name(QualifiedName::new(ns, id.clone()));
+            apis.push(Api::IgnoredItem {
+                name,
+                err,
+                ctx: Some(ctx),
+            });
             None
         }
     }
@@ -60,7 +69,6 @@ pub(crate) fn convert_apis<FF, SF, EF, TF, A, B: 'static>(
         ApiName,
         Box<FuncToConvert>,
         A::FunAnalysis,
-        Option<QualifiedName>,
     ) -> Result<Box<dyn Iterator<Item = Api<B>>>, ConvertErrorWithContext>,
     SF: FnMut(
         ApiName,
@@ -79,7 +87,7 @@ pub(crate) fn convert_apis<FF, SF, EF, TF, A, B: 'static>(
     ) -> Result<Box<dyn Iterator<Item = Api<B>>>, ConvertErrorWithContext>,
 {
     out_apis.extend(in_apis.into_iter().flat_map(|api| {
-        let tn = api.name().clone();
+        let fullname = api.name_info().clone();
         let result: Result<Box<dyn Iterator<Item = Api<B>>>, ConvertErrorWithContext> = match api {
             // No changes to any of these...
             Api::ConcreteType {
@@ -106,9 +114,15 @@ pub(crate) fn convert_apis<FF, SF, EF, TF, A, B: 'static>(
             Api::RustType { name, path } => {
                 Ok(Box::new(std::iter::once(Api::RustType { name, path })))
             }
-            Api::RustFn { name, sig, path } => {
-                Ok(Box::new(std::iter::once(Api::RustFn { name, sig, path })))
-            }
+            Api::RustFn {
+                name,
+                details,
+                receiver,
+            } => Ok(Box::new(std::iter::once(Api::RustFn {
+                name,
+                details,
+                receiver,
+            }))),
             Api::RustSubclassFn {
                 name,
                 subclass,
@@ -147,31 +161,25 @@ pub(crate) fn convert_apis<FF, SF, EF, TF, A, B: 'static>(
                 name,
                 fun,
                 analysis,
-                name_for_gc,
-            } => func_conversion(name, fun, analysis, name_for_gc),
+            } => func_conversion(name, fun, analysis),
             Api::Struct {
                 name,
                 details,
                 analysis,
             } => struct_conversion(name, details, analysis),
         };
-        api_or_error(tn, result)
+        api_or_error(fullname, result)
     }))
 }
 
 fn api_or_error<T: AnalysisPhase + 'static>(
-    name: QualifiedName,
+    name: ApiName,
     api_or_error: Result<Box<dyn Iterator<Item = Api<T>>>, ConvertErrorWithContext>,
 ) -> Box<dyn Iterator<Item = Api<T>>> {
     match api_or_error {
         Ok(opt) => opt,
-        Err(ConvertErrorWithContext(err, None)) => {
-            eprintln!("Ignored {}: {}", name, err);
-            Box::new(std::iter::empty())
-        }
-        Err(ConvertErrorWithContext(err, Some(ctx))) => {
-            eprintln!("Ignored {}: {}", name, err);
-            Box::new(ignored_item(name.get_namespace(), ctx, err).into_iter())
+        Err(ConvertErrorWithContext(err, ctx)) => {
+            Box::new(std::iter::once(Api::IgnoredItem { name, err, ctx }))
         }
     }
 }
@@ -190,22 +198,11 @@ pub(crate) fn convert_item_apis<F, A, B: 'static>(
     B: AnalysisPhase,
 {
     out_apis.extend(in_apis.into_iter().flat_map(|api| {
+        let fullname = api.name_info().clone();
         let tn = api.name().clone();
         let result = fun(api).map_err(|e| {
-            ConvertErrorWithContext(e, Some(ErrorContext::Item(tn.get_final_ident())))
+            ConvertErrorWithContext(e, Some(ErrorContext::new_for_item(tn.get_final_ident())))
         });
-        api_or_error(tn, result)
+        api_or_error(fullname, result)
     }))
-}
-
-fn ignored_item<A: AnalysisPhase>(
-    ns: &Namespace,
-    ctx: ErrorContext,
-    err: ConvertError,
-) -> Option<Api<A>> {
-    ctx.get_id().cloned().map(|id| Api::IgnoredItem {
-        name: ApiName::new(ns, id),
-        err,
-        ctx,
-    })
 }

@@ -23,8 +23,15 @@ generate some placeholder function or struct with documentation explaining what 
 
 ![VSCode showing an error for an API where autocxx couldn't generate bindings](vscode2.png)
 
-_This_ is why it's crucial to use an IDE with `autocxx`. (Alternatively, you can use
-`cargo expand`, but it's unpleasant.)
+_This_ is why it's crucial to use an IDE with `autocxx`.
+
+## How can I see what bindings `autocxx` has generated?
+
+Options:
+
+* Use an IDE. (Did we mention, you should use an IDE?)
+* `pub use ffi::*` in your code, then run `cargo doc`.
+* Use `cargo expand`.
 
 ## How to work around cases where `autocxx` can't generate bindings
 
@@ -65,6 +72,10 @@ fn main() {
     assert_eq!(ffi::take_A(&a), autocxx::c_int(5));
 }
 ```
+
+At the moment, you can refer *from* manual bindings *to* automated bindings,
+not the other way round. So if you specify a type in your manual bindings, any
+functions which use that type will also need to be manually declared.
 
 ## My build entirely failed
 

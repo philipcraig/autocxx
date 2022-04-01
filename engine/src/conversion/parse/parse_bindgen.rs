@@ -24,7 +24,7 @@ use crate::{
     },
     types::validate_ident_ok_for_cxx,
 };
-use autocxx_parser::IncludeCppConfig;
+use autocxx_parser::{IncludeCppConfig, RustPath};
 use syn::{parse_quote, Fields, Ident, Item, TypePath, UseTree};
 
 use super::{
@@ -50,7 +50,7 @@ pub(crate) fn api_name_qualified(
 ) -> Result<ApiName, ConvertErrorWithContext> {
     match validate_ident_ok_for_cxx(&id.to_string()) {
         Err(e) => {
-            let ctx = ErrorContext::Item(id);
+            let ctx = ErrorContext::new_for_item(id);
             Err(ConvertErrorWithContext(e, Some(ctx)))
         }
         Ok(..) => Ok(api_name(ns, id, attrs)),
@@ -95,17 +95,33 @@ impl<'a> ParseBindgen<'a> {
                 let id = fun.sig.ident.clone();
                 Api::RustFn {
                     name: ApiName::new_in_root_namespace(id),
-                    path: fun.path.clone(),
-                    sig: fun.sig.clone(),
+                    details: fun.clone(),
+                    receiver: fun.receiver.as_ref().map(|receiver_id| {
+                        QualifiedName::new(&Namespace::new(), receiver_id.clone())
+                    }),
                 }
             }));
-        self.apis.extend(self.config.rust_types.iter().map(|path| {
+        let unique_rust_types: HashSet<&RustPath> = self.config.rust_types.iter().collect();
+        self.apis.extend(unique_rust_types.into_iter().map(|path| {
             let id = path.get_final_ident();
             Api::RustType {
                 name: ApiName::new_in_root_namespace(id.clone()),
                 path: path.clone(),
             }
         }));
+        self.apis.extend(
+            self.config
+                .concretes
+                .iter()
+                .map(|(cpp_definition, rust_id)| {
+                    let name = ApiName::new_in_root_namespace(rust_id.clone());
+                    Api::ConcreteType {
+                        name,
+                        cpp_definition: cpp_definition.clone(),
+                        rs_definition: None,
+                    }
+                }),
+        );
     }
 
     fn find_items_in_root(items: Vec<Item>) -> Result<Vec<Item>, ConvertError> {
@@ -183,7 +199,7 @@ impl<'a> ParseBindgen<'a> {
                 };
                 if let Some(api) = api {
                     if !self.config.is_on_blocklist(&api.name().to_cpp_name()) {
-                        self.apis.push_eliminating_duplicates(api);
+                        self.apis.push(api);
                     }
                 }
                 Ok(())
@@ -195,7 +211,7 @@ impl<'a> ParseBindgen<'a> {
                     item: e,
                 };
                 if !self.config.is_on_blocklist(&api.name().to_cpp_name()) {
-                    self.apis.push_eliminating_duplicates(api);
+                    self.apis.push(api);
                 }
                 Ok(())
             }
@@ -248,24 +264,25 @@ impl<'a> ParseBindgen<'a> {
                             if new_tyname == old_tyname {
                                 return Err(ConvertErrorWithContext(
                                     ConvertError::InfinitelyRecursiveTypedef(new_tyname),
-                                    Some(ErrorContext::Item(new_id.clone())),
+                                    Some(ErrorContext::new_for_item(new_id.clone())),
                                 ));
                             }
                             let annotations = BindgenSemanticAttributes::new(&use_item.attrs);
-                            self.apis
-                                .push_eliminating_duplicates(UnanalyzedApi::Typedef {
-                                    name: api_name(ns, new_id.clone(), &annotations),
-                                    item: TypedefKind::Use(parse_quote! {
-                                        pub use #old_path as #new_id;
-                                    }),
-                                    old_tyname: Some(old_tyname),
-                                    analysis: (),
-                                });
+                            self.apis.push(UnanalyzedApi::Typedef {
+                                name: api_name(ns, new_id.clone(), &annotations),
+                                item: TypedefKind::Use(parse_quote! {
+                                    pub use #old_path as #new_id;
+                                }),
+                                old_tyname: Some(old_tyname),
+                                analysis: (),
+                            });
                             break;
                         }
                         _ => {
                             return Err(ConvertErrorWithContext(
-                                ConvertError::UnexpectedUseStatement(segs.into_iter().last()),
+                                ConvertError::UnexpectedUseStatement(
+                                    segs.into_iter().last().map(|i| i.to_string()),
+                                ),
                                 None,
                             ))
                         }
@@ -275,7 +292,7 @@ impl<'a> ParseBindgen<'a> {
             }
             Item::Const(const_item) => {
                 let annotations = BindgenSemanticAttributes::new(&const_item.attrs);
-                self.apis.push_eliminating_duplicates(UnanalyzedApi::Const {
+                self.apis.push(UnanalyzedApi::Const {
                     name: api_name(ns, const_item.ident.clone(), &annotations),
                     const_item,
                 });
@@ -285,13 +302,12 @@ impl<'a> ParseBindgen<'a> {
                 let annotations = BindgenSemanticAttributes::new(&ity.attrs);
                 // It's known that sometimes bindgen will give us duplicate typedefs with the
                 // same name - see test_issue_264.
-                self.apis
-                    .push_eliminating_duplicates(UnanalyzedApi::Typedef {
-                        name: api_name(ns, ity.ident.clone(), &annotations),
-                        item: TypedefKind::Type(ity),
-                        old_tyname: None,
-                        analysis: (),
-                    });
+                self.apis.push(UnanalyzedApi::Typedef {
+                    name: api_name(ns, ity.ident.clone(), &annotations),
+                    item: TypedefKind::Type(ity),
+                    old_tyname: None,
+                    analysis: (),
+                });
                 Ok(())
             }
             _ => Err(ConvertErrorWithContext(

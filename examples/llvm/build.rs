@@ -6,12 +6,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::path::PathBuf;
 fn main() -> miette::Result<()> {
-    let path = std::path::PathBuf::from("src");
-    let mut b = autocxx_build::Builder::new("src/main.rs", &[&path]).build()?;
-    b.flag_if_supported("-std=c++14")
-        .compile("autocxx-non-trivial-type-on-stack-example");
-    println!("cargo:rerun-if-changed=src/main.rs");
-    println!("cargo:rerun-if-changed=src/cpp.h");
+    let mut b = autocxx_build::Builder::new(
+        "src/lib.rs",
+        &[
+            PathBuf::from("/usr/include/llvm-13"),
+            PathBuf::from("/usr/include/llvm-c-13"),
+        ],
+    )
+    .build()?;
+
+    b.flag_if_supported("-std=c++14").compile("llvm");
+    println!("cargo:rerun-if-changed=src/lib.rs");
     Ok(())
 }

@@ -8,10 +8,12 @@
 
 use crate::{
     builder_modifiers::{
-        make_clang_arg_adder, EnableAutodiscover, SetSuppressSystemHeaders, SkipCxxGen,
+        make_clang_arg_adder, make_cpp17_adder, EnableAutodiscover, SetSuppressSystemHeaders,
+        SkipCxxGen,
     },
     code_checkers::{
-        make_error_finder, make_string_finder, CppCounter, CppMatcher, NoSystemHeadersChecker,
+        make_error_finder, make_rust_code_finder, make_string_finder, CppCounter, CppMatcher,
+        NoSystemHeadersChecker,
     },
 };
 use autocxx_integration_tests::{
@@ -708,6 +710,36 @@ fn test_take_nonpod_by_ref() {
 }
 
 #[test]
+fn test_take_nonpod_by_up() {
+    let cxx = indoc! {"
+        uint32_t take_bob(std::unique_ptr<Bob> a) {
+            return a->a;
+        }
+        std::unique_ptr<Bob> make_bob(uint32_t a) {
+            auto b = std::make_unique<Bob>();
+            b->a = a;
+            return b;
+        }
+    "};
+    let hdr = indoc! {"
+        #include <cstdint>
+        #include <memory>
+        struct Bob {
+            uint32_t a;
+        };
+
+        struct NOP { inline void take_bob(); };
+        std::unique_ptr<Bob> make_bob(uint32_t a);
+        uint32_t take_bob(std::unique_ptr<Bob> a);
+    "};
+    let rs = quote! {
+        let a = ffi::make_bob(12);
+        assert_eq!(ffi::take_bob(a), 12);
+    };
+    run_test(cxx, hdr, rs, &["take_bob", "Bob", "make_bob", "NOP"], &[]);
+}
+
+#[test]
 fn test_take_nonpod_by_ptr_simple() {
     let cxx = indoc! {"
         uint32_t take_bob(const Bob* a) {
@@ -1063,6 +1095,37 @@ fn test_enum_with_funcs() {
         assert!(a == b);
     };
     run_test(cxx, hdr, rs, &["Bob", "give_bob"], &[]);
+}
+
+#[test]
+fn test_re_export() {
+    let cxx = indoc! {"
+        Bob give_bob() {
+            return Bob::BOB_VALUE_2;
+        }
+    "};
+    let hdr = indoc! {"
+        #include <cstdint>
+        enum Bob {
+            BOB_VALUE_1,
+            BOB_VALUE_2,
+        };
+        Bob give_bob();
+    "};
+    let rs = quote! {
+        let a = ffi::Bob::BOB_VALUE_2;
+        let b = ffi::give_bob();
+        assert!(a == b);
+    };
+    run_test_ex(
+        cxx,
+        hdr,
+        rs,
+        directives_from_lists(&["Bob", "give_bob"], &[], None),
+        None,
+        None,
+        Some(quote! { pub use ffi::Bob; }),
+    );
 }
 
 #[test]
@@ -1472,6 +1535,77 @@ fn test_method_pass_nonpod_by_value() {
 }
 
 #[test]
+fn test_pass_two_nonpod_by_value() {
+    let cxx = indoc! {"
+        void take_a(A, A) {
+        }
+    "};
+    let hdr = indoc! {"
+        #include <string>
+        struct A {
+            std::string b;
+        };
+        void take_a(A, A);
+    "};
+    let rs = quote! {
+        let a = ffi::A::make_unique();
+        let a2 = ffi::A::make_unique();
+        ffi::take_a(a, a2);
+    };
+    run_test(cxx, hdr, rs, &["A", "take_a"], &[]);
+}
+
+#[test]
+fn test_issue_931() {
+    let cxx = "";
+    let hdr = indoc! {"
+    namespace a {
+        struct __cow_string {
+          __cow_string();
+        };
+        namespace {
+        class b {
+          __cow_string c;
+        };
+        } // namespace
+        class j {
+          b d;
+        };
+        template <typename> class e;
+        } // namespace a
+        namespace {
+        template <typename> struct f {};
+        } // namespace
+        namespace llvm {
+        template <class> class g {
+          union {
+            f<a::j> h;
+          };
+        };
+        class MemoryBuffer {
+          g<a::e<MemoryBuffer>> i;
+        };
+        } // namespace llvm
+    "};
+    let rs = quote! {};
+    run_test(cxx, hdr, rs, &["llvm::MemoryBuffer"], &[]);
+}
+
+#[test]
+fn test_issue_936() {
+    let cxx = "";
+    let hdr = indoc! {"
+    struct a;
+    class B {
+    public:
+        B(a &, bool);
+    };
+    "};
+    let rs = quote! {};
+    run_test(cxx, hdr, rs, &["B"], &[]);
+}
+
+#[test]
 fn test_method_pass_nonpod_by_value_with_up() {
     // Checks that existing UniquePtr params are not wrecked
     // by the conversion we do here.
@@ -1508,6 +1642,38 @@ fn test_method_pass_nonpod_by_value_with_up() {
         assert_eq!(b.get_bob(a, a2), 12);
     };
     run_test(cxx, hdr, rs, &["Anna", "give_anna"], &["Bob"]);
+}
+
+#[test]
+fn test_issue_940() {
+    let cxx = "";
+    let hdr = indoc! {"
+    template <class> class b;
+    template <class = void> struct c;
+    struct identity;
+    template <class, class, class e, class> class f {
+    using g = e;
+    g h;
+    };
+    template <class i, class k = c<>, class l = b<i>>
+    using j = f<i, identity, k, l>;
+    class n;
+    class RenderFrameHost {
+    public:
+    virtual void o(const j<n> &);
+    virtual ~RenderFrameHost() {}
+    };
+    "};
+    let rs = quote! {};
+    run_test_ex(
+        cxx,
+        hdr,
+        rs,
+        directives_from_lists(&["RenderFrameHost"], &[], None),
+        make_cpp17_adder(),
+        None,
+        None,
+    );
 }
 
 #[test]
@@ -2280,6 +2446,49 @@ fn test_return_reference() {
 }
 
 #[test]
+fn test_return_reference_non_pod() {
+    let cxx = indoc! {"
+        const Bob& give_bob(const Bob& input_bob) {
+            return input_bob;
+        }
+    "};
+    let hdr = indoc! {"
+        #include <cstdint>
+        struct Bob {
+            uint32_t a;
+            uint32_t b;
+        };
+        namespace A {
+            void give_bob(); // force wrapper generation
+        }
+        const Bob& give_bob(const Bob& input_bob);
+    "};
+    let rs = quote! {};
+    run_test(cxx, hdr, rs, &["give_bob", "Bob", "A::give_bob"], &[]);
+}
+
+#[test]
+fn test_return_reference_non_pod_string() {
+    let cxx = indoc! {"
+        const std::string& give_bob(const Bob& input_bob) {
+            return input_bob.a;
+        }
+    "};
+    let hdr = indoc! {"
+        #include <string>
+        struct Bob {
+            std::string a;
+        };
+       // namespace A {
+       //     void give_bob(); // force wrapper generation
+       // }
+        const std::string& give_bob(const Bob& input_bob);
+    "};
+    let rs = quote! {};
+    run_test(cxx, hdr, rs, &["give_bob", "Bob"], &[]);
+}
+
+#[test]
 fn test_member_return_reference() {
     let hdr = indoc! {"
         #include <string>
@@ -2798,6 +3007,19 @@ fn test_string_constant() {
         assert_eq!(a, "Foo");
     };
     run_test("", hdr, rs, &["STRING"], &[]);
+}
+
+#[test]
+fn test_string_let_cxx_string() {
+    let hdr = indoc! {"
+        #include <string>
+        inline void take_string(const std::string&) {};
+    "};
+    let rs = quote! {
+        autocxx::cxx::let_cxx_string!(s = "hello");
+        ffi::take_string(&s);
+    };
+    run_test("", hdr, rs, &["take_string"], &[]);
 }
 
 #[test]
@@ -3589,8 +3811,8 @@ fn test_ulong() {
 #[test]
 fn test_typedef_to_ulong() {
     let hdr = indoc! {"
-        #include <cstddef>
-        inline size_t daft(size_t a) { return a; }
+        typedef unsigned long fiddly;
+        inline fiddly daft(fiddly a) { return a; }
     "};
     let rs = quote! {
         assert_eq!(ffi::daft(autocxx::c_ulong(34)), autocxx::c_ulong(34));
@@ -4446,6 +4668,24 @@ fn test_take_array() {
 }
 
 #[test]
+fn test_take_array_in_struct() {
+    let hdr = indoc! {"
+    #include <cstdint>
+    struct data {
+        char a[4];
+    };
+    uint32_t take_array(const data a) {
+        return a.a[0] + a.a[2];
+    }
+    "};
+    let rs = quote! {
+        let c = ffi::data { a: [ 10, 20, 30, 40 ] };
+        assert_eq!(ffi::take_array(c), 40);
+    };
+    run_test("", hdr, rs, &["take_array"], &["data"]);
+}
+
+#[test]
 fn test_union_ignored() {
     let hdr = indoc! {"
     #include <cstdint>
@@ -4485,12 +4725,33 @@ fn test_double_underscores_ignored() {
         uint32_t get_a() const { return 2; }
         uint32_t a;
     };
+
+    struct __default { __default() = default; };
+    struct __destructor { ~__destructor() = default; };
+    struct __copy { __copy(const __copy&) = default; };
+    struct __copy_operator { __copy_operator &operator=(const __copy_operator&) = default; };
+    struct __move { __move(__move&&) = default; };
+    struct __move_operator { __move_operator &operator=(const __move_operator&) = default; };
     "};
     let rs = quote! {
         let b = ffi::B::make_unique();
         assert_eq!(b.get_a(), 2);
     };
-    run_test("", hdr, rs, &["B"], &[]);
+    run_test(
+        "",
+        hdr,
+        rs,
+        &[
+            "B",
+            "__default",
+            "__destructor",
+            "__copy",
+            "__copy_operator",
+            "__move",
+            "__move_operator",
+        ],
+        &[],
+    );
 }
 
 // This test fails on Windows gnu but not on Windows msvc
@@ -5270,7 +5531,9 @@ fn test_error_generated_for_array_dependent_method() {
         quote! { generate! ("A")},
         None,
         Some(make_string_finder(
-            ["take_func", "couldn't be generated"].to_vec(),
+            ["take_func", "couldn't be generated"]
+                .map(|s| s.to_string())
+                .to_vec(),
         )),
         None,
     );
@@ -5400,7 +5663,9 @@ fn test_doc_passthru() {
         directives_from_lists(&["A", "get_a"], &["B"], None),
         None,
         Some(make_string_finder(
-            ["Giraffes", "Elephants", "Rhinos"].to_vec(),
+            ["Giraffes", "Elephants", "Rhinos"]
+                .map(|s| s.to_string())
+                .to_vec(),
         )),
         None,
     );
@@ -5559,7 +5824,7 @@ fn test_stringview() {
         hdr,
         rs,
         directives_from_lists(&["take_string_view", "return_string_view"], &[], None),
-        make_clang_arg_adder(&["-std=c++17"]),
+        make_cpp17_adder(),
         None,
         None,
     );
@@ -5684,6 +5949,30 @@ fn test_int_vector() {
     };
 
     run_test("", hdr, rs, &["give_vec"], &[]);
+}
+
+#[test]
+fn test_size_t() {
+    let hdr = indoc! {"
+        #include <cstddef>
+        inline size_t get_count() { return 7; }
+    "};
+
+    let rs = quote! {
+        ffi::get_count();
+    };
+
+    run_test_ex(
+        "",
+        hdr,
+        rs,
+        directives_from_lists(&["get_count"], &[], None),
+        None,
+        Some(make_rust_code_finder(vec![
+            quote! {fn get_count() -> usize},
+        ])),
+        None,
+    );
 }
 
 #[test]
@@ -6166,42 +6455,90 @@ fn test_pass_thru_rust_reference() {
 }
 
 #[test]
-#[ignore]
-fn test_rust_reference_method() {
+fn test_extern_rust_method() {
     let hdr = indoc! {"
-    #include <cstdint>
-
-    struct RustType;
-    uint32_t take_rust_reference(const RustType& foo);
+        #include <cstdint>
+        struct RustType;
+        uint32_t examine(const RustType& foo);
     "};
     let cxx = indoc! {"
-    #include \"cxxgen.h\"
-    uint32_t take_rust_reference(const RustType& foo) {
-        return foo.get();
-    }"};
+        uint32_t examine(const RustType& foo) {
+            return foo.get();
+        }"};
     let rs = quote! {
-        let foo = RustType(3);
-        assert_eq!(ffi::take_rust_reference(&foo), 3);
+        let a = RustType(74);
+        assert_eq!(ffi::examine(&a), 74);
     };
     run_test_ex(
         cxx,
         hdr,
         rs,
-        quote! {
-            generate!("take_rust_reference")
-        },
+        directives_from_lists(&["examine"], &[], None),
         Some(Box::new(EnableAutodiscover)),
         None,
         Some(quote! {
-            #[autocxx::extern_rust_type]
+            #[autocxx::extern_rust::extern_rust_type]
             pub struct RustType(i32);
             impl RustType {
-                #[autocxx::extern_rust_function]
+                #[autocxx::extern_rust::extern_rust_function]
                 pub fn get(&self) -> i32 {
                     return self.0
                 }
             }
         }),
+    );
+}
+
+#[test]
+fn test_rust_reference_no_autodiscover() {
+    let hdr = indoc! {"
+    #include <cstdint>
+
+    struct RustType;
+    inline uint32_t take_rust_reference(const RustType&) {
+        return 4;
+    }
+    "};
+    let rs = quote! {
+        let foo = RustType(3);
+        let result = ffi::take_rust_reference(&foo);
+        assert_eq!(result, 4);
+    };
+    run_test_ex(
+        "",
+        hdr,
+        rs,
+        directives_from_lists(&["take_rust_reference"], &[], None),
+        None,
+        None,
+        Some(quote! {
+            #[autocxx::extern_rust::extern_rust_type]
+            pub struct RustType(i32);
+        }),
+    );
+}
+
+#[test]
+#[cfg_attr(skip_windows_msvc_failing_tests, ignore)]
+// TODO - replace make_clang_arg_adder with something that knows how to add an MSVC-suitable
+// directive for the cc build.
+fn test_cpp17() {
+    let hdr = indoc! {"
+        static_assert(__cplusplus >= 201703L, \"This file expects a C++17 compatible compiler.\");
+        inline void foo() {}
+    "};
+    run_test_ex(
+        "",
+        hdr,
+        quote! {
+            ffi::foo();
+        },
+        quote! {
+            generate!("foo")
+        },
+        make_cpp17_adder(),
+        None,
+        None,
     );
 }
 
@@ -6288,15 +6625,22 @@ fn test_box_via_extern_rust_in_mod() {
 }
 
 #[test]
-fn test_extern_rust_fn() {
+fn test_extern_rust_fn_simple() {
+    let cpp = indoc! {"
+        void foo() {
+            my_rust_fun();
+        }
+    "};
     let hdr = indoc! {"
         #include <cxx.h>
         inline void do_thing() {}
     "};
     run_test_ex(
-        "",
+        cpp,
         hdr,
-        quote! {},
+        quote! {
+            ffi::do_thing();
+        },
         quote! {
             generate!("do_thing")
         },
@@ -6305,7 +6649,6 @@ fn test_extern_rust_fn() {
         Some(quote! {
             #[autocxx::extern_rust::extern_rust_function]
             fn my_rust_fun() {
-
             }
         }),
     );
@@ -6325,6 +6668,51 @@ fn test_extern_rust_fn_in_mod() {
             generate!("do_thing")
         },
         Some(Box::new(EnableAutodiscover)),
+        None,
+        Some(quote! {
+            mod bar {
+                #[autocxx::extern_rust::extern_rust_function]
+                pub fn my_rust_fun() {
+
+                }
+            }
+        }),
+    );
+}
+
+#[test]
+fn test_issue_956() {
+    let hdr = indoc! {"
+        #include <cstdint>
+        inline void take_int(int&) {}
+        inline void take_uin16(uint16_t&) {}
+        inline void take_char16(char16_t &) {}
+    "};
+    run_test(
+        "",
+        hdr,
+        quote! {},
+        &["take_int", "take_uin16", "take_char16"],
+        &[],
+    );
+}
+
+#[test]
+fn test_extern_rust_fn_no_autodiscover() {
+    let hdr = indoc! {"
+        #include <cxx.h>
+    "};
+    let cpp = indoc! {"
+        void call_it() {
+            my_rust_fun();
+        }
+    "};
+    run_test_ex(
+        cpp,
+        hdr,
+        quote! {},
+        quote! {},
+        None,
         None,
         Some(quote! {
             mod bar {
@@ -7789,6 +8177,29 @@ fn test_constructor_moveit() {
 }
 
 #[test]
+fn test_move_out_of_uniqueptr() {
+    let hdr = indoc! {"
+    #include <stdint.h>
+    #include <string>
+    struct A {
+        A() {}
+        std::string so_we_are_non_trivial;
+    };
+    inline A get_a() {
+        A a;
+        return a;
+    }
+    "};
+    let rs = quote! {
+        let a = ffi::get_a();
+        moveit! {
+            let _stack_obj = autocxx::moveit::new::mov(a);
+        }
+    };
+    run_test("", hdr, rs, &["A", "get_a"], &[]);
+}
+
+#[test]
 fn test_implicit_constructor_moveit() {
     let hdr = indoc! {"
     #include <stdint.h>
@@ -7864,6 +8275,10 @@ fn test_nonconst_reference_parameter() {
     let hdr = indoc! {"
     #include <stdint.h>
     #include <string>
+
+    // Force generating a wrapper for the second `take_a`.
+    struct NOP { void take_a() {}; };
+
     struct A {
         std::string so_we_are_non_trivial;
     };
@@ -7873,7 +8288,7 @@ fn test_nonconst_reference_parameter() {
         let mut heap_obj = ffi::A::make_unique();
         ffi::take_a(heap_obj.pin_mut());
     };
-    run_test("", hdr, rs, &["A", "take_a"], &[]);
+    run_test("", hdr, rs, &["NOP", "A", "take_a"], &[]);
 }
 
 #[test]
@@ -7881,6 +8296,10 @@ fn test_nonconst_reference_method_parameter() {
     let hdr = indoc! {"
     #include <stdint.h>
     #include <string>
+
+    // Force generating a wrapper for the second `take_a`.
+    struct NOP { void take_a() {}; };
+
     struct A {
         std::string so_we_are_non_trivial;
     };
@@ -7893,7 +8312,7 @@ fn test_nonconst_reference_method_parameter() {
         let b = ffi::B::make_unique();
         b.take_a(a.pin_mut());
     };
-    run_test("", hdr, rs, &["A", "B"], &[]);
+    run_test("", hdr, rs, &["NOP", "A", "B"], &[]);
 }
 
 #[test]
@@ -8130,6 +8549,34 @@ fn test_explicit_everything() {
     "};
     let rs = quote! {};
     run_test("", hdr, rs, &["A"], &[]);
+}
+
+#[test]
+fn test_generate_ns() {
+    let hdr = indoc! {"
+    namespace A {
+        inline void foo() {}
+        inline void bar() {}
+    }
+    namespace B {
+        inline void baz() {}
+    }
+    "};
+    let rs = quote! {
+        ffi::A::foo();
+    };
+    run_test_ex(
+        "",
+        hdr,
+        rs,
+        quote! {
+            generate_ns!("A")
+            safety!(unsafe_ffi)
+        },
+        None,
+        None,
+        None,
+    );
 }
 
 #[test]
@@ -8392,25 +8839,20 @@ fn size_and_alignment_test(pod: bool) {
     let allowlist_types: Vec<&str> = allowlist_types.iter().map(AsRef::as_ref).collect_vec();
     let allowlist_fns: Vec<&str> = allowlist_fns.iter().map(AsRef::as_ref).collect_vec();
     let allowlist_both: Vec<&str> = allowlist_both.iter().map(AsRef::as_ref).collect_vec();
-    let rs = TYPES.iter().fold(
-        quote! {
-            use std::convert::TryInto;
-        },
-        |mut accumulator, (name, _)| {
-            let get_align_symbol =
-                proc_macro2::Ident::new(&format!("get_alignof_{}", name), Span::call_site());
-            let get_size_symbol =
-                proc_macro2::Ident::new(&format!("get_sizeof_{}", name), Span::call_site());
-            let type_symbol = proc_macro2::Ident::new(name, Span::call_site());
-            accumulator.extend(quote! {
-                let c_size: usize = ffi::#get_size_symbol().0.try_into().unwrap();
-                let c_align: usize = ffi::#get_align_symbol().0.try_into().unwrap();
-                assert_eq!(std::mem::size_of::<ffi::#type_symbol>(), c_size);
-                assert_eq!(std::mem::align_of::<ffi::#type_symbol>(), c_align);
-            });
-            accumulator
-        },
-    );
+    let rs = TYPES.iter().fold(quote! {}, |mut accumulator, (name, _)| {
+        let get_align_symbol =
+            proc_macro2::Ident::new(&format!("get_alignof_{}", name), Span::call_site());
+        let get_size_symbol =
+            proc_macro2::Ident::new(&format!("get_sizeof_{}", name), Span::call_site());
+        let type_symbol = proc_macro2::Ident::new(name, Span::call_site());
+        accumulator.extend(quote! {
+            let c_size = ffi::#get_size_symbol();
+            let c_align = ffi::#get_align_symbol();
+            assert_eq!(std::mem::size_of::<ffi::#type_symbol>(), c_size);
+            assert_eq!(std::mem::align_of::<ffi::#type_symbol>(), c_align);
+        });
+        accumulator
+    });
     if pod {
         run_test("", &hdr, rs, &allowlist_fns, &allowlist_types);
     } else {
@@ -9769,6 +10211,133 @@ fn test_tricky_destructors() {
         ],
         &[],
     );
+}
+
+#[test]
+fn test_concretize() {
+    let hdr = indoc! {"
+        #include <string>
+        template<typename CONTENTS>
+        class Container {
+        private:
+            CONTENTS* contents;
+        };
+        struct B {
+            std::string a;
+        };
+    "};
+    run_test_ex(
+        "",
+        hdr,
+        quote! {},
+        quote! {
+            concrete!("Container<B>", ContainerOfB)
+            generate!("B")
+        },
+        None,
+        None,
+        Some(quote! {
+            struct HasAField {
+                contents: ffi::ContainerOfB
+            }
+        }),
+    );
+}
+
+#[test]
+fn test_doc_comments_survive() {
+    let hdr = indoc! {"
+        #include <cstdint>
+        /// Struct line A
+        /// Struct line B
+        struct A { int b; };
+
+        /// POD struct line A
+        /// POD struct line B
+        struct B {
+            /// Field line A
+            /// Field line B
+            uint32_t b;
+
+            /// Method line A
+            /// Method line B
+            void foo() {}
+        };
+
+        /// Enum line A
+        /// Enum line B
+        enum C {
+            /// Variant line A
+            /// Variant line B
+            VARIANT,
+        };
+
+        /// Function line A
+        /// Function line B
+        inline void D() {}
+    "};
+
+    let expected_messages = [
+        "Struct",
+        "POD struct",
+        "Field",
+        "Method",
+        "Enum",
+        "Variant",
+        "Function",
+    ]
+    .into_iter()
+    .flat_map(|l| [format!("{} line A", l), format!("{} line B", l)])
+    .collect_vec();
+
+    run_test_ex(
+        "",
+        hdr,
+        quote! {},
+        directives_from_lists(&["A", "C", "D"], &["B"], None),
+        None,
+        Some(make_string_finder(expected_messages)),
+        None,
+    );
+}
+
+#[test]
+fn optional_param_in_copy_constructor() {
+    let hdr = indoc! {"
+        struct A {
+            A(const A &other, bool optional_arg = false);
+        };
+    "};
+    run_test("", hdr, quote! {}, &["A"], &[]);
+}
+
+#[test]
+fn param_in_copy_constructor() {
+    let hdr = indoc! {"
+        struct A {
+            A(const A &other, bool arg);
+        };
+    "};
+    run_test("", hdr, quote! {}, &["A"], &[]);
+}
+
+#[test]
+fn test_pass_rust_str_and_return_struct() {
+    let cxx = indoc! {"
+        A take_str_return_struct(rust::Str) {
+            A a;
+            return a;
+        }
+    "};
+    let hdr = indoc! {"
+        #include <cxx.h>
+        struct A {};
+        A take_str_return_struct(rust::Str);
+    "};
+    let rs = quote! {
+        ffi::take_str_return_struct("hi");
+    };
+    run_test(cxx, hdr, rs, &["take_str_return_struct"], &[]);
 }
 
 // Yet to test:
